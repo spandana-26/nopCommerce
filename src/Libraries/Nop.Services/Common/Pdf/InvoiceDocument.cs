@@ -1,329 +1,123 @@
-﻿using System.Globalization;
-using Nop.Services.Localization;
-using QuestPDF.Fluent;
-using QuestPDF.Helpers;
-using QuestPDF.Infrastructure;
-using IContainer = QuestPDF.Infrastructure.IContainer;
+﻿using System.ComponentModel;
+using iTextSharp.text;
+using iTextSharp.text.pdf;
+using PdfRpt.Core.Contracts;
+using PdfRpt.Core.Helper;
 
 namespace Nop.Services.Common.Pdf;
 
 /// <summary>
 /// Represents the invoice document
 /// </summary>
-public partial class InvoiceDocument : PdfDocument<InvoiceSource>
+public partial class InvoiceDocument : PdfDocument<ProductItem>
 {
-
-    #region Ctor
-
-    public InvoiceDocument(InvoiceSource invoiceSource, ILocalizationService localizationService) : base(invoiceSource, localizationService)
-    {
-    }
-
-    #endregion
-
     #region Utilities
 
-    /// <summary>
-    /// Compose the invoice
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected void ComposeContent(IContainer container)
+    private PdfGrid CreateAdressesInfo()
     {
-        container.PaddingVertical(20).Column(column =>
-        {
-            column.Spacing(15);
+        var font = PdfDocumentHelper.GetFont(FontFamily);
+        var billingInfo = PdfDocumentHelper.BuildPdfPCell(
+            BuildAddressTable<InvoiceDocument>(source => BillingAddress, font, BillingAddress), Language);
+        var shippingInfo = PdfDocumentHelper.BuildPdfPCell(
+            BuildAddressTable<InvoiceDocument>(source => ShippingAddress, font, ShippingAddress), Language);
 
-            column.Item().Table(table =>
-            {
-                table.ColumnsDefinition(columns =>
-                {
-                    columns.RelativeColumn();
-                    columns.ConstantColumn(50);
-                    columns.RelativeColumn();
+        var addressesTable = PdfDocumentHelper.BuildPdfGrid(numColumns: 2, Language);
 
-                });
+        billingInfo.Padding = 5;
+        shippingInfo.Padding = 5;
 
-                table.Cell().Element(ComposeBillingAddress);
-                table.Cell();
-                table.Cell().Element(ComposeShippingAddress);
-            });
+        addressesTable.AddCell(billingInfo);
+        addressesTable.AddCell(shippingInfo);
 
-            column.Item().Element(ComposeProducts);
-
-            column.Item().ShowEntire().Element(ComposeCheckoutAttributes);
-
-            column.Item().ShowEntire().Element(c => ComposeOrderTotals(c, Source.Totals));
-
-            column.Item().Element(ComposeOrderNotes);
-        });
+        return addressesTable;
     }
 
-    /// <summary>
-    /// Compose billing address
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected void ComposeBillingAddress(IContainer container)
+    private PdfGrid CreateInvoiceHeader()
     {
-        container.Column(column =>
+        var headerTable = PdfDocumentHelper.BuildPdfGrid(numColumns: 2, Language);
+        var font = PdfDocumentHelper.GetFont(FontFamily);
+
+        var info = PdfDocumentHelper.BuildPdfGrid(numColumns: 1, Language);
+        info.SpacingAfter = 15;
+
+        info.AddCell(PdfDocumentHelper.BuildPdfPCell<InvoiceDocument>(source => OrderNumberText, OrderNumberText, font, Language));
+        info.AddCell(PdfDocumentHelper.BuildHyperLinkCell<InvoiceDocument>(source => StoreUrl, font, Language, StoreUrl));
+        info.AddTextCell<InvoiceDocument>(source => OrderDateUser, OrderDateUser, font, Language);
+
+        headerTable.AddCell(PdfDocumentHelper.BuildPdfPCell(info, Language, horizontalAlign: Element.ALIGN_LEFT));
+
+        if (LogoData is not null)
         {
-            column.Spacing(2);
-
-            column.Item()
-                .BorderBottom(1)
-                .DefaultTextStyle(style => style.SemiBold())
-                .Text(t => ComposeLabel<InvoiceSource>(t, x => x.BillingAddress));
-
-            column.Item().Column(c => ComposeAddress(c, Source.BillingAddress));
-        });
-    }
-
-    /// <summary>
-    /// Compose shipping address
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected void ComposeShippingAddress(IContainer container)
-    {
-        container.Column(column =>
-        {
-            column.Spacing(2);
-
-            column.Item()
-                .BorderBottom(1)
-                .DefaultTextStyle(style => style.SemiBold())
-                .Text(t => ComposeLabel<InvoiceSource>(t, x => x.ShippingAddress));
-
-            column.Item().Column(c => ComposeAddress(c, Source.ShippingAddress));
-        });
-    }
-
-    /// <summary>
-    /// Compose the header
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected void ComposeHeader(IContainer container)
-    {
-        container.ShowOnce().DefaultTextStyle(tStyle => tStyle.SemiBold()).Row(row =>
-        {
-            row.RelativeItem().Column(column =>
+            var logo = PdfImageHelper.GetITextSharpImageFromByteArray(LogoData);
+            headerTable.AddCell(new PdfPCell(logo, fit: true)
             {
-                column.Item().Text(t => ComposeField(t, Source, x => x.OrderNumberText, delimiter: "# "));
-                column.Item().Hyperlink(Source.StoreUrl).Text(Source.StoreUrl);
-                column.Item().Text(t =>
-                    ComposeField(t,
-                        Source,
-                        x => x.OrderDateUser,
-                        date => date.ToString("D", new CultureInfo(Source.Language.LanguageCulture)),
-                        ": "
-                    ));
-            });
-
-            var logoContainer = row.ConstantItem(65).Height(65);
-
-            if (Source.LogoData is not null && Source.LogoData.Length != 0)
-                logoContainer.Image(Source.LogoData, ImageScaling.FitArea);
-        });
-    }
-
-    /// <summary>
-    /// Compose order products
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected void ComposeProducts(IContainer container)
-    {
-        container.Table(table =>
-        {
-            table.ColumnsDefinition(columns =>
-            {
-                columns.RelativeColumn(3);
-                if (Source.ShowSkuInProductList)
-                    columns.RelativeColumn();
-                if (Source.ShowVendorInProductList)
-                    columns.RelativeColumn();
-                columns.RelativeColumn();
-                columns.RelativeColumn();
-                columns.RelativeColumn();
-            });
-
-            table.Header(header =>
-            {
-                header.Cell().Element(cellStyle).Text(t => ComposeLabel<ProductItem>(t, x => x.Name));
-
-                if (Source.ShowSkuInProductList)
-                    header.Cell().Element(cellStyle).Text(t => ComposeLabel<ProductItem>(t, x => x.Sku));
-
-                if (Source.ShowVendorInProductList)
-                    header.Cell().Element(cellStyle).Text(t => ComposeLabel<ProductItem>(t, x => x.VendorName));
-
-                header.Cell().Element(cellStyle).AlignRight().Text(t => ComposeLabel<ProductItem>(t, x => x.Price));
-                header.Cell().Element(cellStyle).AlignRight().Text(t => ComposeLabel<ProductItem>(t, x => x.Quantity));
-                header.Cell().Element(cellStyle).AlignRight().Text(t => ComposeLabel<ProductItem>(t, x => x.Total));
-
-                static IContainer cellStyle(IContainer container)
-                {
-                    return container.DefaultTextStyle(x => x.SemiBold()).PaddingVertical(5).BorderBottom(1).BorderColor(Colors.Black);
-                }
-            });
-
-            foreach (var product in Source.Products)
-            {
-                table.Cell().Element(cellStyle).Element(productContainer =>
-                {
-                    productContainer.Column(pColumn =>
-                    {
-                        pColumn.Item().Text(product.Name);
-
-                        foreach (var attribute in product.ProductAttributes)
-                            pColumn.Item().DefaultTextStyle(s => s.Italic().FontSize(9)).Text(attribute);
-                    });
-                });
-
-                if (Source.ShowSkuInProductList)
-                    table.Cell().Element(cellStyle).Text(product.Sku);
-                if (Source.ShowVendorInProductList)
-                    table.Cell().Element(cellStyle).Text(product.VendorName);
-                table.Cell().Element(cellStyle).AlignRight().Text(product.Price);
-                table.Cell().Element(cellStyle).AlignRight().Text(product.Quantity);
-                table.Cell().Element(cellStyle).AlignRight().Text(product.Total);
-
-                static IContainer cellStyle(IContainer container)
-                {
-                    return container.BorderBottom(1).BorderColor(Colors.Grey.Lighten2).PaddingVertical(5).ShowEntire();
-                }
-            }
-        });
-    }
-
-    /// <summary>
-    /// Compose an address
-    /// </summary>
-    /// <param name="address">Address item</param>
-    protected ColumnDescriptor ComposeAddress(ColumnDescriptor column, AddressItem address)
-    {
-        column.Item().Text(t => ComposeField(t, address, x => x.Company, delimiter: ": "));
-        column.Item().Text(t => ComposeField(t, address, x => x.Name, delimiter: ": "));
-        column.Item().Text(t => ComposeField(t, address, x => x.Phone, delimiter: ": "));
-        column.Item().Text(t => ComposeField(t, address, x => x.AddressLine, delimiter: ": "));
-        column.Item().Text(t => ComposeField(t, address, x => x.VATNumber));
-
-        foreach (var attribute in address.AddressAttributes)
-            column.Item().Text(attribute);
-
-        column.Item().Text(t => ComposeField(t, address, x => x.PaymentMethod, delimiter: ": "));
-        column.Item().Text(t => ComposeField(t, address, x => x.ShippingMethod, delimiter: ": "));
-
-        foreach (var (key, value) in address.CustomValues)
-        {
-            column.Item().Text(text =>
-            {
-                text.Span(key);
-                text.Span(": ");
-                text.Span(value?.ToString());
+                Border = 0,
+                FixedHeight = 65,
+                RunDirection = Language.GetPdfRunDirection(),
+                VerticalAlignment = Element.ALIGN_CENTER,
+                HorizontalAlignment = Element.ALIGN_CENTER
             });
         }
+        else
+        {
+            headerTable.AddEmptyCell();
+        }
 
-        return column;
+        headerTable.AddCell(PdfDocumentHelper.BuildPdfPCell(CreateAdressesInfo(), Language, collSpan: 2));
+
+        return headerTable;
     }
 
-    /// <summary>
-    /// Compose checkout attributes
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected void ComposeCheckoutAttributes(IContainer container)
+    private PdfGrid CreateFooter(FooterData footerData)
     {
-        if (string.IsNullOrEmpty(Source.CheckoutAttributes))
-            return;
+        var font = PdfDocumentHelper.GetFont(FontFamily);
+        var footerTable = PdfDocumentHelper.BuildPdfGrid(numColumns: 2, Language);
 
-        container.DefaultTextStyle(tStyle => tStyle.SemiBold()).Column(column =>
-        {
-            column.Spacing(5);
-            column.Item().Text(Source.CheckoutAttributes);
-        });
+        if (!FooterTextColumn1.Any() && !FooterTextColumn2.Any())
+            return footerTable;
+
+        var footer1Table = PdfDocumentHelper.BuildPdfGrid(numColumns: 1, Language);
+        foreach (var line in FooterTextColumn1)
+            footer1Table.AddCell(PdfDocumentHelper.BuildPdfPCell(line, Language, font));
+
+        var footer2Table = PdfDocumentHelper.BuildPdfGrid(numColumns: 1, Language);
+        foreach (var line in FooterTextColumn2)
+            footer2Table.AddCell(PdfDocumentHelper.BuildPdfPCell(line, Language, font));
+
+        footerTable.AddCell(PdfDocumentHelper.BuildPdfPCell(footer1Table, Language));
+        footerTable.AddCell(PdfDocumentHelper.BuildPdfPCell(footer2Table, Language));
+
+        footerTable.AddCell(PdfDocumentHelper.BuildPdfPCell($"- {footerData.CurrentPageNumber} -", Language, font, collSpan: 2, horizontalAlign: Element.ALIGN_CENTER));
+
+        return footerTable;
     }
 
-    /// <summary>
-    /// Compose the order totals
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected void ComposeOrderTotals(IContainer container, InvoiceTotals totals)
+    private PdfGrid CreateSummary()
     {
-        container.AlignRight().Column(column =>
-        {
-            column.Item().Text(t => ComposeField(t, totals, x => x.SubTotal, delimiter: ": "));
-            column.Item().Text(t => ComposeField(t, totals, x => x.Discount, delimiter: ": "));
-            column.Item().Text(t => ComposeField(t, totals, x => x.Shipping, delimiter: ": "));
-            column.Item().Text(t => ComposeField(t, totals, x => x.PaymentMethodAdditionalFee, delimiter: ": "));
-            column.Item().Text(t => ComposeField(t, totals, x => x.Tax, delimiter: ": "));
+        var summaryData = PdfDocumentHelper.BuildPdfGrid(numColumns: 1, Language);
+        var font = PdfDocumentHelper.GetFont(FontFamily);
 
-            foreach (var rate in totals.TaxRates)
-                column.Item().Text(rate);
+        if (!string.IsNullOrEmpty(Totals.SubTotal))
+            summaryData.AddTextCell<InvoiceTotals>(totals => totals.SubTotal, Totals.SubTotal, font, Language);
 
-            foreach (var card in totals.GiftCards)
-                column.Item().Text(card);
+        if (!string.IsNullOrEmpty(Totals.Discount))
+            summaryData.AddTextCell<InvoiceTotals>(totals => totals.Discount, Totals.Discount, font, Language);
+        if (!string.IsNullOrEmpty(Totals.Shipping))
+            summaryData.AddTextCell<InvoiceTotals>(totals => totals.Shipping, Totals.Shipping, font, Language);
+        if (!string.IsNullOrEmpty(Totals.PaymentMethodAdditionalFee))
+            summaryData.AddTextCell<InvoiceTotals>(totals => totals.PaymentMethodAdditionalFee, Totals.PaymentMethodAdditionalFee, font, Language);
+        if (!string.IsNullOrEmpty(Totals.Tax))
+            summaryData.AddTextCell<InvoiceTotals>(totals => totals.Tax, Totals.Tax, font, Language);
 
-            column.Item().Text(totals.RewardPoints);
-            column.Item().Text(totals.OrderTotal);
-        });
-    }
+        foreach (var rate in Totals.TaxRates)
+            summaryData.AddCell(new PdfPCell(new Phrase(rate)));
 
-    /// <summary>
-    /// Compose order notes
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected void ComposeOrderNotes(IContainer container)
-    {
-        if (Source.OrderNotes?.Any() != true)
-            return;
+        if (!string.IsNullOrEmpty(Totals.RewardPoints))
+            summaryData.AddTextCell<InvoiceTotals>(totals => totals.Tax, Totals.RewardPoints, font, Language);
+        if (!string.IsNullOrEmpty(Totals.OrderTotal))
+            summaryData.AddTextCell<InvoiceTotals>(totals => totals.OrderTotal, Totals.OrderTotal, font, Language);
 
-        container.Background(Colors.Grey.Lighten3).Padding(10).Column(column =>
-        {
-            column.Spacing(5);
-            column.Item()
-                .BorderBottom(1).BorderColor(Colors.Black)
-                .DefaultTextStyle(style => style.SemiBold())
-                .Text(t => ComposeLabel<InvoiceSource>(t, x => x.OrderNotes));
-
-            foreach (var (createdOn, note) in Source.OrderNotes)
-            {
-                column.Item()
-                    .ShowEntire()
-                    .DefaultTextStyle(DefaultStyle.FontSize(10))
-                    .PaddingVertical(5)
-                    .Row(row =>
-                    {
-                        row.AutoItem().Text(createdOn);
-                        row.RelativeItem().PaddingLeft(10)
-                            .Text(note);
-                    });
-            }
-        });
-    }
-
-    /// <summary>
-    /// Compose the footer
-    /// </summary>
-    /// <param name="container">Content placement container</param>
-    protected virtual void ComposeFooter(IContainer container)
-    {
-        container.Column(column =>
-        {
-            column.Item().Row(row =>
-            {
-                row.RelativeItem().Column(col1 =>
-                {
-                    foreach (var line in Source.FooterTextColumn1)
-                        col1.Item().Text(line);
-                });
-
-                row.RelativeItem().Column(col2 =>
-                {
-                    foreach (var line in Source.FooterTextColumn2)
-                        col2.Item().Text(line);
-                });
-            });
-
-            column.Item().AlignCenter().PaddingTop(10)
-                .Text(text => text.CurrentPageNumber().Format(p => $"- {p} -"));
-        });
+        return summaryData;
     }
 
     #endregion
@@ -331,29 +125,133 @@ public partial class InvoiceDocument : PdfDocument<InvoiceSource>
     #region Methods
 
     /// <summary>
-    /// Compose document's structure
+    /// Generate the invoice
     /// </summary>
-    /// <param name="container">Content placement container</param>
-    public override void Compose(IDocumentContainer container)
+    /// <param name="pdfStreamOutput">Stream for PDF output</param>
+    public override void Generate(Stream pdfStreamOutput)
     {
-        container
-            .Page(page =>
+        Document
+            .MainTablePreferences(table =>
             {
-                var titleStyle = DefaultStyle.FontSize(10).NormalWeight();
-                page.DefaultTextStyle(titleStyle);
-
-                if (Source.IsRightToLeft)
-                    page.ContentFromRightToLeft();
-
-                page.Size(Source.PageSize);
-                page.Margin(35);
-                page.MarginBottom(20);
-
-                page.Header().Element(ComposeHeader);
-                page.Content().Element(ComposeContent);
-                page.Footer().AlignCenter().Element(ComposeFooter);
-            });
+                table.ColumnsWidthsType(TableColumnWidthType.Relative);
+            })
+            .MainTableDataSource(dataSource =>
+            {
+                dataSource.StronglyTypedList(Products);
+            })
+            .PagesFooter(footer =>
+            {
+                footer.InlineFooter(inlineFooter =>
+                {
+                    inlineFooter.FooterProperties(new FooterBasicProperties
+                    {
+                        PdfFont = footer.PdfFont,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        RunDirection = PdfRunDirection.LeftToRight
+                    });
+                    inlineFooter.AddPageFooter(data => CreateFooter(data));
+                });
+            })
+            .MainTableColumns(columns =>
+            {
+                var font = PdfDocumentHelper.GetFont(FontFamily);
+                columns.AddColumn(column => column.ConfigureProductColumn<ProductItem>(p => p.Name, Language, font, width: 10, printProductAttributes: true));
+                columns.AddColumn(column => column.ConfigureProductColumn<ProductItem>(p => p.Sku, Language, font, width: 3));
+                columns.AddColumn(column => column.ConfigureProductColumn<ProductItem>(p => p.Price, Language, font, width: 3));
+                columns.AddColumn(column => column.ConfigureProductColumn<ProductItem>(p => p.Quantity, Language, font, width: 2));
+                columns.AddColumn(column => column.ConfigureProductColumn<ProductItem>(p => p.Total, Language, font, width: 3));
+            })
+            .MainTableEvents(events =>
+            {
+                events.MainTableCreated(events =>
+                {
+                    //add to body, since adding hyperlinks to document header is not allowed
+                    events.PdfDoc.Add(CreateInvoiceHeader());
+                });
+                events.MainTableAdded(events =>
+                {
+                    var summaryTable = PdfDocumentHelper.BuildPdfGrid(numColumns: 3, Language);
+                    summaryTable.AddCell(new PdfPCell() { Colspan = 2, Border = 0 });
+                    summaryTable.AddCell(PdfDocumentHelper.BuildPdfPCell(CreateSummary(), Language));
+                    events.PdfDoc.Add(summaryTable);
+                });
+            })
+            .Generate(builder => builder.AsPdfStream(pdfStreamOutput, closeStream: false));
     }
+
+    #endregion
+
+    #region Properties
+
+    /// <summary>
+    /// Gets or sets the logo binary
+    /// </summary>
+    public byte[] LogoData { get; set; }
+
+    /// <summary>
+    /// Gets or sets the date and time of order creation
+    /// </summary>
+    [DisplayName("Pdf.OrderDate")]
+    public string OrderDateUser { get; set; }
+
+    /// <summary>
+    /// Gets or sets the order number
+    /// </summary>
+    [DisplayName("Pdf.Order")]
+    public string OrderNumberText { get; set; }
+
+    /// <summary>
+    /// Gets or sets store location
+    /// </summary>
+    public string StoreUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets the billing address
+    /// </summary>
+    [DisplayName("Pdf.BillingInformation")]
+    public AddressItem BillingAddress { get; set; }
+
+    /// <summary>
+    /// Gets or sets the shipping address
+    /// </summary>
+    [DisplayName("Pdf.ShippingInformation")]
+    public AddressItem ShippingAddress { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to display product SKU in the invoice document
+    /// </summary>
+    public bool ShowSkuInProductList { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to display vendor name in the invoice document
+    /// </summary>
+    public bool ShowVendorInProductList { get; set; }
+
+    /// <summary>
+    /// Gets or sets the checkout attribute description
+    /// </summary>
+    public string CheckoutAttributes { get; set; }
+
+    /// <summary>
+    /// Gets or sets order totals
+    /// </summary>
+    public InvoiceTotals Totals { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets order notes
+    /// </summary>
+    [DisplayName("Pdf.OrderNotes")]
+    public List<(string, string)> OrderNotes { get; set; }
+
+    /// <summary>
+    /// Gets or sets the text that will appear at the bottom of invoice (column 1)
+    /// </summary>
+    public List<string> FooterTextColumn1 { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the text that will appear at the bottom of invoice (column 2)
+    /// </summary>
+    public List<string> FooterTextColumn2 { get; set; } = new();
 
     #endregion
 }

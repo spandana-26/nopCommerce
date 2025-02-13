@@ -1,4 +1,5 @@
-﻿using System.IO.Compression;
+﻿using System.Globalization;
+using System.IO.Compression;
 using Nop.Core;
 using Nop.Core.Domain.Catalog;
 using Nop.Core.Domain.Common;
@@ -25,8 +26,7 @@ using Nop.Services.Payments;
 using Nop.Services.Shipping;
 using Nop.Services.Stores;
 using Nop.Services.Vendors;
-using QuestPDF.Fluent;
-using QuestPDF.Helpers;
+using PdfRpt.Core.Contracts;
 
 namespace Nop.Services.Common;
 
@@ -625,8 +625,7 @@ public partial class PdfService : IPdfService
 
         //order total
         var orderTotalInCustomerCurrency = _currencyService.ConvertCurrency(order.OrderTotal, order.CurrencyRate);
-        var orderTotalStr = await _priceFormatter.FormatPriceAsync(orderTotalInCustomerCurrency, true, order.CustomerCurrencyCode, false, languageId);
-        result.OrderTotal = $"{await _localizationService.GetResourceAsync("Pdf.OrderTotal", languageId)} {orderTotalStr}";
+        result.OrderTotal = await _priceFormatter.FormatPriceAsync(orderTotalInCustomerCurrency, true, order.CustomerCurrencyCode, false, languageId);
 
         return result;
     }
@@ -697,15 +696,15 @@ public partial class PdfService : IPdfService
                 .Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries)
                 .ToList();
 
-        var source = new InvoiceSource()
+        var document = new InvoiceDocument
         {
             StoreUrl = orderStore.Url?.Trim('/'),
             Language = language,
             FontFamily = pdfSettingsByStore.FontFamily,
-            OrderDateUser = date,
+            OrderDateUser = date.ToString("D", new CultureInfo(language.LanguageCulture)),
             LogoData = logo,
             OrderNumberText = order.CustomOrderNumber,
-            PageSize = pdfSettingsByStore.LetterPageSizeEnabled ? PageSizes.Letter : PageSizes.A4,
+            PageSize = pdfSettingsByStore.LetterPageSizeEnabled ? PdfPageSize.Letter : PdfPageSize.A4,
             BillingAddress = await GetBillingAddressAsync(vendor, language, order),
             ShippingAddress = await GetShippingAddressAsync(language, order),
             Products = await GetOrderProductItemsAsync(order, orderItems, language),
@@ -719,8 +718,7 @@ public partial class PdfService : IPdfService
         };
 
         await using var pdfStream = new MemoryStream();
-        new InvoiceDocument(source, _localizationService)
-            .GeneratePdf(pdfStream);
+        document.Generate(pdfStream);
 
         pdfStream.Position = 0;
         await pdfStream.CopyToAsync(stream);
@@ -746,7 +744,7 @@ public partial class PdfService : IPdfService
 
         foreach (var order in orders)
         {
-            var entryName = string.Format("{0} {1}", await _localizationService.GetResourceAsync("Pdf.Order"), order.CustomOrderNumber);
+            var entryName = string.Format(await _localizationService.GetResourceAsync("Pdf.Order"), order.CustomOrderNumber);
 
             await using var fileStreamInZip = archive.CreateEntry($"{entryName}.pdf").Open();
             await using var pdfStream = new MemoryStream();
@@ -773,7 +771,7 @@ public partial class PdfService : IPdfService
 
         foreach (var shipment in shipments)
         {
-            var entryName = $"{await _localizationService.GetResourceAsync("Pdf.Shipment")}{shipment.Id}";
+            var entryName = string.Format(await _localizationService.GetResourceAsync("Pdf.Shipment"), shipment.Id);
 
             await using var fileStreamInZip = archive.CreateEntry($"{entryName}.pdf").Open();
             await using var pdfStream = new MemoryStream();
@@ -820,9 +818,10 @@ public partial class PdfService : IPdfService
         if (orderItems?.Any() != true)
             return;
 
-        var source = new ShipmentSource
+        await using var pdfStream = new MemoryStream();
+        var document = new ShipmentDocument
         {
-            PageSize = pdfSettingsByStore.LetterPageSizeEnabled ? PageSizes.Letter : PageSizes.A4,
+            PageSize = pdfSettingsByStore.LetterPageSizeEnabled ? PdfPageSize.Letter : PdfPageSize.A4,
             Language = language,
             FontFamily = pdfSettingsByStore.FontFamily,
             ShipmentNumberText = shipment.Id.ToString(),
@@ -831,10 +830,7 @@ public partial class PdfService : IPdfService
             Products = await GetOrderProductItemsAsync(order, orderItems, language, shipmentItems)
         };
 
-        await using var pdfStream = new MemoryStream();
-
-        new ShipmentDocument(source, _localizationService)
-            .GeneratePdf(pdfStream);
+        document.Generate(pdfStream);
 
         pdfStream.Position = 0;
         await pdfStream.CopyToAsync(stream);
@@ -904,18 +900,16 @@ public partial class PdfService : IPdfService
             productItems.Add(item);
         }
 
-        var source = new CatalogSource
+        var catalogDocument = new CatalogDocument
         {
             Language = lang,
-            PageSize = pdfSettingsByStore.LetterPageSizeEnabled ? PageSizes.Letter : PageSizes.A4,
+            PageSize = pdfSettingsByStore.LetterPageSizeEnabled ? PdfPageSize.Letter : PdfPageSize.A4,
             FontFamily = pdfSettingsByStore.FontFamily,
             Products = productItems
         };
 
         await using var pdfStream = new MemoryStream();
-
-        new CatalogDocument(source, _localizationService)
-            .GeneratePdf(pdfStream);
+        catalogDocument.Generate(pdfStream);
 
         pdfStream.Position = 0;
         await pdfStream.CopyToAsync(stream);

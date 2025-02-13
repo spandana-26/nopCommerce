@@ -44,6 +44,14 @@ public class SettingMigration : MigrationBase
             vendorSettings.MaximumProductPicturesNumber = 5;
             settingService.SaveSetting(vendorSettings, settings => settings.MaximumProductPicturesNumber);
         }
+
+        //#7477
+        var pdfSettings = settingService.LoadSetting<PdfSettings>();
+        if (!settingService.SettingExists(pdfSettings, settings => settings.FontFamily))
+        {
+            pdfSettings.FontFamily = string.Empty;
+            settingService.SaveSetting(pdfSettings, settings => pdfSettings.FontFamily);
+        }
     }
 
     public override void Down()
